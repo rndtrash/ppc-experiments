@@ -1,0 +1,5 @@
+<chrp-boot>
+<description>Hellorld!</description>
+<os-name>Hellorld</os-name>
+<boot-script>boot &device;:,\ppc\boot.elf</boot-script>
+</chrp-boot>
