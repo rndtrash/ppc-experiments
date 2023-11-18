@@ -9,4 +9,5 @@
 .elf    Raw    'UNIX'   'boot'  "bootstrap"
 vmlinux Raw    'UNIX'   'boot'  "bootstrap"
 .conf   Raw    'UNIX'   'conf'  "bootstrap"
+.tbxi   Raw    'UNIX'   'conf'  "bootstrap"
 *       Ascii  '????'   '????'  "Text file"

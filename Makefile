@@ -1,14 +1,18 @@
-SOURCES := src/main.c
-OBJECTS := $(SOURCES:src/%.c=bin/%.o)
+SOURCES_C := src/main.c
+SOURCES_AS := src/ofwmagic.s
+OBJECTS := $(SOURCES_C:src/%.c=bin/%.c.o) $(SOURCES_AS:src/%.s=bin/%.s.o)
 
-CFLAGS := -target powerpc-none-eabi -static -msoft-float
-LDFLAGS := -nostdlib -e StartTVector -v
+RELOC := E00000
+
+CFLAGS := -target powerpc-none-eabi -static -msoft-float -ffreestanding
+ASFLAGS := -filetype=obj --arch=ppc32
+LDFLAGS := -N --Bstatic -nostdlib -e _start -Ttext ${RELOC} -v
 
 .PHONY: clean qemu
 
 all: bin/hellorld.iso
 
-bin/hellorld.iso: bin/boot.elf bootinfo.txt hfs.map
+bin/hellorld.iso: bin/boot.elf boot.tbxi bootinfo.txt hfs.map
 	#dd if=/dev/zero of=bin/hellorld.dmg bs=1M count=16 status=progress
 	##parted bin/hellorld.dmg --script mklabel mac mkpart primary hfs 2048s 100%
 	#mkdir -p dmg_mount
@@ -21,8 +25,7 @@ bin/hellorld.iso: bin/boot.elf bootinfo.txt hfs.map
 	#sudo umount ./dmg_mount/
 	#sudo kpartx -d bin/hellorld.dmg
 	mkdir -p ./dmg_mount/ppc
-	cp bootinfo.txt ./dmg_mount/ppc
-	cp bin/boot.elf ./dmg_mount/ppc
+	cp bootinfo.txt boot.tbxi bin/boot.elf ./dmg_mount/ppc
 	genisoimage \
 		-joliet-long -r \
 		-V 'Hellorld' \
@@ -33,7 +36,7 @@ bin/hellorld.iso: bin/boot.elf bootinfo.txt hfs.map
 		-hfs-parms MAX_XTCSIZE=2656248 \
 		--chrp-boot \
 		-part -no-desktop \
-		-hfs-bless ./dmg_mount/ppc/boot.elf \
+		-hfs-bless ppc \
 		-hfs-volid Hellorld_boot \
 		./dmg_mount/
 	
@@ -41,8 +44,11 @@ bin/hellorld.iso: bin/boot.elf bootinfo.txt hfs.map
 bin/boot.elf: $(OBJECTS)
 	ld.lld $(OBJECTS) $(LDFLAGS) -o bin/boot.elf
 
-bin/%.o: src/%.c Makefile
+bin/%.c.o: src/%.c Makefile
 	clang $< $(CFLAGS) -c -o $@
+
+bin/%.s.o: src/%.s Makefile
+	llvm-mc $< $(ASFLAGS) -o $@
 
 clean:
 	rm -f bin/hellorld.dmg

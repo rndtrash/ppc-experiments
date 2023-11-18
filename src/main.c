@@ -1,3 +1,5 @@
+static int stack[8192/4 + 4] __attribute__((__used__));
+
 typedef long CICell;
 
 struct CIArgs {
@@ -136,31 +138,153 @@ typedef struct CIArgs CIArgs;
 
 typedef long (*ClientInterfacePtr)(CIArgs *args);
 
-static void Start(void*, void*, ClientInterfacePtr);
-static void Main(ClientInterfacePtr ciPtr);
-
-const unsigned long StartTVector[2] = {(unsigned long)Start, 0};
-
-char gStackBaseAddr[0x8000];
 ClientInterfacePtr gClientInterface;
 
-static void Start(void *unused1, void *unused2, ClientInterfacePtr ciPtr)
-{
-  long newSP;
+static void main();
+void startup(void *vpd, int res, ClientInterfacePtr openfirm, char *arg, int argl);
 
-  (void)unused1;
-  (void)unused2;
-  
-  // Move the Stack to a chunk of the BSS
-  newSP = (long)gStackBaseAddr + sizeof(gStackBaseAddr) - 0x100;
-  __asm__ volatile("mr 1, %0" : : "r" (newSP));
-  
-  Main(ciPtr);
+__asm(
+"	.text			\n"
+"	.globl	_start		\n"
+"_start:			\n"
+"	sync			\n"
+"	isync			\n"
+"	lis	%r1,stack@ha	\n"
+"	addi	%r1,%r1,stack@l	\n"
+"	addi	%r1,%r1,8192	\n"
+"				\n"
+"	mfmsr	%r8		\n"
+"	li	%r0,0		\n"
+"	mtmsr	%r0		\n"
+"	isync			\n"
+"				\n"
+"				\n" /* test for 601 */
+"	mfspr	%r0,287		\n" /* mfpvbr %r0 PVR = 287 */
+"	srwi	%r0,%r0,0x10	\n"
+"	cmplwi	%r0,0x02	\n" /* 601 CPU = 0x0001 */
+"	blt	2f		\n" /* skip over non-601 BAT setup */
+"	cmplwi	%r0,0x39	\n" /* PPC970 */
+"	blt	0f		\n"
+"	cmplwi	%r0,0x45	\n" /* PPC970GX */
+"	ble	1f		\n"
+	/* non PPC 601 BATs */
+"0:	li	%r0,0		\n"
+"	mtibatu	0,%r0		\n"
+"	mtibatu	1,%r0		\n"
+"	mtibatu	2,%r0		\n"
+"	mtibatu	3,%r0		\n"
+"	mtdbatu	0,%r0		\n"
+"	mtdbatu	1,%r0		\n"
+"	mtdbatu	2,%r0		\n"
+"	mtdbatu	3,%r0		\n"
+"				\n"
+"	li	%r9,0x12	\n"	/* BATL(0, BAT_M, BAT_PP_RW) */
+"	mtibatl	0,%r9		\n"
+"	mtdbatl	0,%r9		\n"
+"	li	%r9,0x1ffe	\n"	/* BATU(0, BAT_BL_256M, BAT_Vs) */
+"	mtibatu	0,%r9		\n"
+"	mtdbatu	0,%r9		\n"
+"	b	3f		\n"
+	/* 970 initialization stuff */
+"1:				\n"
+	/* make sure we're in bridge mode */
+"	clrldi	%r8,%r8,3	\n"
+"	mtmsrd	%r8		\n"
+"	isync			\n"
+	 /* clear HID5 DCBZ bits (56/57), need to do this early */
+"	mfspr	%r9,0x3f6	\n"
+"	rldimi	%r9,0,6,56	\n"
+"	sync			\n"
+"	mtspr	0x3f6,%r9	\n"
+"	isync			\n"
+"	sync			\n"
+	/* Setup HID1 features, prefetch + i-cacheability controlled by PTE */
+"	mfspr	%r9,0x3f1	\n"
+"	li	%r11,0x1200	\n"
+"	sldi	%r11,%r11,44	\n"
+"	or	%r9,%r9,%r11	\n"
+"	mtspr	0x3f1,%r9	\n"
+"	isync			\n"
+"	sync			\n"
+"	b	3f		\n"	
+	/* PPC 601 BATs */
+"2:	li	%r0,0		\n"
+"	mtibatu	0,%r0		\n"
+"	mtibatu	1,%r0		\n"
+"	mtibatu	2,%r0		\n"
+"	mtibatu	3,%r0		\n"
+"				\n"
+"	li	%r9,0x7f	\n"
+"	mtibatl	0,%r9		\n"
+"	li	%r9,0x1a	\n"
+"	mtibatu	0,%r9		\n"
+"				\n"
+"	lis	%r9,0x80	\n"
+"	addi	%r9,%r9,0x7f	\n"
+"	mtibatl	1,%r9		\n"
+"	lis	%r9,0x80	\n"
+"	addi	%r9,%r9,0x1a	\n"
+"	mtibatu	1,%r9		\n"
+"				\n"
+"	lis	%r9,0x100	\n"
+"	addi	%r9,%r9,0x7f	\n"
+"	mtibatl	2,%r9		\n"
+"	lis	%r9,0x100	\n"
+"	addi	%r9,%r9,0x1a	\n"
+"	mtibatu	2,%r9		\n"
+"				\n"
+"	lis	%r9,0x180	\n"
+"	addi	%r9,%r9,0x7f	\n"
+"	mtibatl	3,%r9		\n"
+"	lis	%r9,0x180	\n"
+"	addi	%r9,%r9,0x1a	\n"
+"	mtibatu	3,%r9		\n"
+"				\n"
+"3:	isync			\n"
+"				\n"
+"	mtmsr	%r8		\n"
+"	isync			\n"
+"				\n"
+	/*
+	 * Make sure that .bss is zeroed
+	 */
+"				\n"
+"	li	%r0,0		\n"
+"	lis	%r8,_edata@ha	\n"
+"	addi	%r8,%r8,_edata@l\n"
+"	lis	%r9,_end@ha	\n"
+"	addi	%r9,%r9,_end@l	\n"
+"				\n"
+"5:	cmpw	0,%r8,%r9	\n"
+"	bge	6f		\n"
+	/*
+	 * clear by bytes to avoid ppc601 alignment exceptions
+	 */
+"	stb	%r0,0(%r8)	\n"
+"	stb	%r0,1(%r8)	\n"
+"	stb	%r0,2(%r8)	\n"
+"	stb	%r0,3(%r8)	\n"
+"	addi	%r8,%r8,4	\n"
+"	b	5b		\n"
+"				\n"
+"6:	b	startup		\n"
+);
+
+void startup(void *vpd, int res, ClientInterfacePtr openfirm, char *arg, int argl)
+{
+	(void) vpd;
+	(void) res;
+	(void) arg;
+	(void) argl;
+	gClientInterface = openfirm;
+	//setup();
+	main();
+	//OF_exit();
 }
 
-static void Main(ClientInterfacePtr ciPtr)
+static void main() // __section(".text")
 {
-	gClientInterface = ciPtr;
+	//gClientInterface = ciPtr;
 
 	CIArgs args;
 	args.service = "interpret";
